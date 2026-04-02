@@ -249,6 +249,7 @@ async function toggleCall() {
         muteBtn.classList.remove('muted');
         setTimeout(() => {
             if (!isInCall) statusText.innerHTML = '準備就緒';
+            document.getElementById('transcript-text').innerText = "(這裡會顯示轉錄文字)";
         }, 2000);
     }
 }

@@ -13,11 +13,14 @@ import uvicorn
 from contextlib import asynccontextmanager
 
 from qwen_asr import Qwen3ASRModel
+import logging
+import json
 
 # 全域變數，用來存放模型
 asr_model = None
 ASR_MODEL_PATH = "Qwen/Qwen3-ASR-1.7B"
-EXPECTED_SAMPLE_RATE = 24000  # 假設 Windows 傳過來的是 24000Hz
+EXPECTED_SAMPLE_RATE = 16000
+logger = logging.getLogger("uvicorn.error")
 
 def _resample_to_16k(wav: np.ndarray, sr: int) -> np.ndarray:
     """簡單的重採樣 (24k -> 16k)"""
@@ -50,45 +53,71 @@ app = FastAPI(lifespan=lifespan, title="Qwen3-ASR Streaming API")
 
 @app.websocket("/ws/asr")
 async def asr_websocket(websocket: WebSocket):
-    """處理即時音訊串流的 WebSocket 端點"""
+    """處理即時音訊串流與控制指令的 WebSocket 端點"""
     await websocket.accept()
-    print("收到新的語音辨識連線！")
+    logger.info("收到新的語音辨識連線！")
     
-    state = asr_model.init_streaming_state(
-        unfixed_chunk_num=2,
-        unfixed_token_num=5,
-        chunk_size_sec=2.0,
-    )
+    # 1. 初始化狀態
+    def reset_state():
+        return asr_model.init_streaming_state(
+            unfixed_chunk_num=2,
+            unfixed_token_num=5,
+            chunk_size_sec=2.0,
+        )
+
+    state = reset_state()
     
     try:
         while True:
-            # 1. 接收來自 Windows 後端的 PCM Bytes
-            audio_bytes = await websocket.receive_bytes()
+            # 使用 receive() 同時相容 bytes 與 text (JSON)
+            message = await websocket.receive()
             
-            # 2. 轉換格式 (Bytes -> int16 -> float32)
-            audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
-            audio_float32 = audio_int16.astype(np.float32) / 32768.0
-            
-            # 3. 如果是 24000Hz，降頻為 16000Hz
-            wav16k = _resample_to_16k(audio_float32, EXPECTED_SAMPLE_RATE)
-            
-            # 4. 餵給 ASR 模型進行推論
-            asr_model.streaming_transcribe(wav16k, state)
-            
-            # 5. 回傳目前的辨識結果
-            await websocket.send_json({
-                "status": "streaming",
-                "language": state.language,
-                "text": state.text
-            })
+            # --- 處理二進位音訊 (PCM Bytes) ---
+            if "bytes" in message:
+                audio_bytes = message["bytes"]
+                audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
+                audio_float32 = audio_int16.astype(np.float32) / 32768.0
+                
+                # 降頻處理
+                wav16k = _resample_to_16k(audio_float32, EXPECTED_SAMPLE_RATE)
+                
+                # 推論
+                asr_model.streaming_transcribe(wav16k, state)
+                
+                # 回傳中間結果
+                await websocket.send_json({
+                    "type": "response.streaming",
+                    "text": state.text
+                })
+
+            # --- 處理 JSON 控制指令 (例如 finish_stream) ---
+            elif "text" in message:
+                data = json.loads(message["text"])
+                
+                if data.get("type") == "control.finish_stream":
+                    reason = data.get("reason", "unknown")
+                    logger.info(f"收到結算指令，原因: {reason}")
+                    
+                    # 執行結算流程
+                    asr_model.finish_streaming_transcribe(state)
+                    final_text = state.text
+                    
+                    # 回傳最終結果
+                    await websocket.send_json({
+                        "type": "response.final",
+                        "text": final_text,
+                        "reason": reason
+                    })
+                    
+                    logger.info(f"結算完成: {final_text}")
+                    
+                    # 🌟 重要：結算後重置狀態，讓同一個連線可以開始下一句話
+                    state = reset_state()
 
     except WebSocketDisconnect:
-        print("連線已斷開，計算最終結果...")
-        try:
-            asr_model.finish_streaming_transcribe(state)
-            print(f"最終辨識結果: [{state.language}] {state.text}")
-        except Exception as e:
-            print(f"收尾時發生錯誤: {e}")
+        logger.info("前端掛斷連線")
+    except Exception as e:
+        logger.error(f"ASR 迴圈發生錯誤: {e}")
 
 if __name__ == "__main__":
     # 使用 0.0.0.0 讓外部 (Windows 主機) 可以連入
