@@ -1,32 +1,34 @@
- # full-duplex2
+﻿# full-duplex2
 
-這個專案提供一個「前端即時錄音 + 後端轉送到 ASR + 即時回傳文字」的全雙工語音串流示範。
-前端以 WebSocket 傳送 PCM Bytes，後端再轉送到 ASR 服務並把辨識結果回推給前端。
+這個專案提供一個「前端即時錄音 + 後端轉送到 ASR + VAD 斷句判斷 + 即時回傳文字」的全雙工語音串流示範。
+前端透過 WebSocket 傳送 PCM Bytes，後端轉送到 ASR 服務並把辨識結果回推給前端，同時用雙層 VAD 進行動態端點偵測。
 
-## 後端邏輯重點
+## 主要功能
 
-- **FastAPI WebSocket `/ws`**：對前端唯一入口，負責接收控制訊息與音訊串流。
-- **ASR 轉送**：後端會再連線到 `ws://127.0.0.1:8001/ws/asr`（ASR 服務）。
-- **雙向串流**：
-	- 前端音訊 (Bytes) -> 後端 -> ASR 服務。
-	- ASR 回傳文字 -> 後端 -> 前端 `response.asr_text`。
-- **Session**：`request.session` 建立 session id，後端用它管理緩衝音訊與結束存檔。
-- **結束通話**：前端斷線後，後端會把收集到的 PCM 存在 `backend/recorder/`。
+- **全雙工串流**：前端音訊 (Bytes) -> 後端 -> ASR；ASR 回傳文字 -> 後端 -> 前端。
+- **雙層 VAD**：Silero VAD + Smart Turn Detector，降低呼吸聲與短停頓造成的誤斷句。
+- **Session 管理**：`request.session` 建立 session id，後端管理緩衝音訊與結束存檔。
+- **自動存檔**：前端斷線後，後端會把收集到的 PCM 存在 `backend/recorder/`。
 
-## 前端如何使用
-- 在backend目錄下輸入
+## 架構與流程
+
+- **前端 (Web UI)**：擷取麥克風音訊 (24kHz / 16-bit / mono PCM)，透過 WebSocket 傳送。
+- **後端 (FastAPI WebSocket `/ws`)**：接收音訊、重採樣 (24kHz -> 16kHz)、轉送 ASR、回推結果。
+- **ASR 服務**：`ws://127.0.0.1:8001/ws/asr`，目前採用 Qwen3-ASR 系列模型。
+- **VAD 模型**：核心在 [backend/vad.py](backend/vad.py) 與 [backend/vad_inference.py](backend/vad_inference.py)。
+
+參考文件：
+- [VAD運作原理及參數調整.md](VAD運作原理及參數調整.md)
+
+## 快速啟動
+
+1. 確認 ASR Server 已啟動於 `ws://127.0.0.1:8001/ws/asr`
+2. 進入 `backend` 目錄並啟動後端
 ```bash
+cd backend
 python main.py
 ```
-
-前端的主要流程在 [frontend/js/all.js](frontend/js/all.js) 和 [frontend/js/recorder.js](frontend/js/recorder.js)。
-
-1. 建立 WebSocket：`ws://<host>/ws`
-2. 連線成功後送出 `request.session`
-3. 收到 `response.session` 後可送出 `request.set_system_prompt`
-4. 開始錄音，將 PCM Bytes 持續透過 `ws.send(pcmArrayBuffer)` 傳出
-5. 後端回傳 `response.asr_text` 時，更新畫面上的即時轉錄
-6. 結束通話時關閉 WebSocket，後端會自動存檔
+3. 開啟瀏覽器 `http://127.0.0.1:7985/`
 
 ## WebSocket 訊息規格
 
@@ -77,31 +79,7 @@ python main.py
 }
 ```
 
-## 前端常見動作對應
-
-| 動作 | 前端送出的 type / payload | 後端回傳 | 前端使用方式 |
-|---|---|---|---|
-| 建立連線 | `request.session` | `response.session` | 取得 `session_id`，後續傳入設定
-| 設定系統提示詞 | `request.set_system_prompt` | 無 (不回傳內容) | 本專案只存入 session，沒有 UI 變更
-| 保持連線 | `request.ping` | `response.ping` | 記錄 log 或忽略
-| 傳送音訊 | PCM Bytes | `response.asr_text` | 更新即時轉錄區塊
-| 結束通話 | WebSocket close | 無 | 後端存檔到 `backend/recorder/`
-
-## ASR 服務
-
-ASR 服務在 [backend/qwan_example.py](backend/qwan_example.py)。
-這個服務會接收 PCM Bytes，進行 24kHz -> 16kHz 重採樣後送入 Qwen3-ASR 模型，並以 WebSocket 回傳即時文字。
-
-## 快速流程摘要
-
-1. 前端連線 `/ws` -> 建立 session
-2. 前端開始送 PCM Bytes
-3. 後端把 Bytes 轉送到 ASR
-4. ASR 回傳文字 -> 後端轉送前端
-5. 前端更新 UI 的即時轉錄
-6. 關閉 WebSocket -> 後端存檔音訊
-
 ## 後續開發
-- 新增VAD
-- 新增LLM回覆
-- 新增TTS功能
+
+- 整合 LLM 回覆 (Azure OpenAI)
+- 整合 TTS 回覆 (如 Fish Speech)
