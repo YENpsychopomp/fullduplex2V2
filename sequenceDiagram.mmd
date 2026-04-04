@@ -1,0 +1,36 @@
+sequenceDiagram
+
+    participant u as Client (Web/App)
+    participant s as Server (FastAPI)
+    participant asr as Speech-to-Text (Qwen ASR)
+    participant vad as VAD Engine (Silero + Smart Turn)
+    participant llm as LLM (Azure OpenAI, planned)
+    participant tts as TTS (Fish Speech, planned)
+
+    u->>+s: 建立 WebSocket 連線 /ws
+    s-->>-u: response.session (session_id)
+
+    par Audio Streaming
+        loop 前端持續送音訊
+            u->>s: audio chunk (PCM bytes, 24kHz, 16-bit, mono)
+            s->>s: 重採樣為 16kHz 並累積 buffer
+            s->>asr: input_audio_buffer.append
+            asr-->>s: transcription.delta
+            s-->>u: response.asr_text (status=partial)
+        end
+    and VAD Detection
+        loop 偵測語音停頓
+            s->>vad: record_and_predict(chunk)
+            vad-->>s: endpoint detected? (true/false)
+            alt 偵測到停頓
+                s->>asr: input_audio_buffer.commit
+                asr-->>s: transcription.done / response.done
+                s-->>u: response.asr_text (status=final)
+            end
+        end
+    end
+
+    Note over llm,tts: 以下為後續擴充流程 (尚未完整串接)
+    llm->>s: text stream (planned)
+    s->>tts: text to speech request (planned)
+    tts-->>u: audio stream (planned)

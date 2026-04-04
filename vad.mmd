@@ -1,0 +1,38 @@
+sequenceDiagram
+    participant client as Client (FastAPI caller)
+    participant stream as StreamingVAD (state machine)
+    participant silero as SileroVAD (speech probability model)
+    participant logic as DynamicEndpointDetector (decision logic)
+    participant smart as AsyncSmartTurnDetector (semantic completeness)
+
+    client->>+stream: process_chunk(audio_bytes)
+    stream->>stream: 累積 buffer，滿 512 samples 才進入推論
+
+    loop 每個 32ms chunk
+        stream->>+silero: prob(chunk_f32)
+        silero-->>-stream: speech probability P
+
+        alt P > VAD_THRESHOLD
+            stream->>logic: 標記 speech，重置 trailing silence
+        else P <= VAD_THRESHOLD
+            stream->>logic: 累加 trailing silence
+        end
+
+        opt 達到 EARLY_CHECK_MS
+            stream->>+smart: submit_async(audio_segment)
+            smart-->>-stream: 背景推論中
+        end
+
+        stream->>smart: get_result_if_ready()
+        opt 推論結果可用
+            smart-->>stream: probability (P_turn)
+            stream->>logic: on_check_completed(P_turn)
+        end
+
+        alt should_force_end 或 should_end_by_confidence
+            stream->>stream: _reset_state()
+            stream-->>client: True (觸發 ASR commit)
+        else 尚未達結束條件
+            stream-->>client: False (繼續收音)
+        end
+    end

@@ -1,85 +1,220 @@
 ﻿# full-duplex2
 
-這個專案提供一個「前端即時錄音 + 後端轉送到 ASR + VAD 斷句判斷 + 即時回傳文字」的全雙工語音串流示範。
-前端透過 WebSocket 傳送 PCM Bytes，後端轉送到 ASR 服務並把辨識結果回推給前端，同時用雙層 VAD 進行動態端點偵測。
+全雙工語音串流示範專案，提供「前端錄音 -> 後端轉送 ASR -> VAD 斷句 -> 前端即時字幕」完整流程。
 
-## 主要功能
+## 專案概述
 
-- **全雙工串流**：前端音訊 (Bytes) -> 後端 -> ASR；ASR 回傳文字 -> 後端 -> 前端。
-- **雙層 VAD**：Silero VAD + Smart Turn Detector，降低呼吸聲與短停頓造成的誤斷句。
-- **Session 管理**：`request.session` 建立 session id，後端管理緩衝音訊與結束存檔。
-- **自動存檔**：前端斷線後，後端會把收集到的 PCM 存在 `backend/recorder/`。
+本專案聚焦在語音輸入鏈路，目標是讓前端可以穩定接收兩種字幕事件：
 
-## 架構與流程
+- `partial`：逐字更新的即時辨識結果
+- `final`：一次完整斷句的最終結果
 
-- **前端 (Web UI)**：擷取麥克風音訊 (24kHz / 16-bit / mono PCM)，透過 WebSocket 傳送。
-- **後端 (FastAPI WebSocket `/ws`)**：接收音訊、重採樣 (24kHz -> 16kHz)、轉送 ASR、回推結果。
-- **ASR 服務**：`ws://127.0.0.1:8001/ws/asr`，目前採用 Qwen3-ASR 系列模型。
-- **VAD 模型**：核心在 [backend/vad.py](backend/vad.py) 與 [backend/vad_inference.py](backend/vad_inference.py)。
+核心流程如下：
 
-參考文件：
+1. 前端透過 WebSocket 持續送出 PCM bytes 或經過Base64編碼的音訊。
+2. 後端重採樣 (24kHz -> 16kHz) 並轉送 ASR。
+3. 後端透過 VAD 偵測停頓並觸發 ASR 結算。
+4. 後端回傳字幕事件給前端顯示。
+
+## 架構
+
+- 前端：錄音、上傳音訊、呈現字幕
+- 後端：FastAPI WebSocket，端點為 `/ws`
+- ASR：遠端即時辨識服務 (Qwen 系列)
+- VAD：Silero VAD + Smart Turn
+
+相關文件：
+
 - [VAD運作原理及參數調整.md](VAD運作原理及參數調整.md)
+- [sequenceDiagram.mmd](sequenceDiagram.mmd)
+- [vad.mmd](vad.mmd)
 
-## 快速啟動
+## 環境需求
 
-1. 確認 ASR Server 已啟動於 `ws://127.0.0.1:8001/ws/asr`
-2. 進入 `backend` 目錄並啟動後端
+- Python 3.10+
+- 可用的 ASR gateway
+- 瀏覽器麥克風權限
+
+## 後端設定與啟動
+
+### 1. 設定環境變數
+
+[backend/main.py](backend/main.py) 會讀取：
+
+- `WS_ASR_URL`
+- `WS_ASR_API_KEY`
+- `WS_ASR_MODEL_NAME`
+
+建議在專案根目錄建立 `.env`：
+
+```env
+WS_ASR_URL=wss://your-asr-gateway/realtime
+WS_ASR_API_KEY=your_key
+WS_ASR_MODEL_NAME=qwen3-asr-1.7b
+```
+
+### 2. 啟動服務
+
 ```bash
 cd backend
 python main.py
 ```
-3. 開啟瀏覽器 `http://127.0.0.1:7985/`
 
-## WebSocket 訊息規格
+預設網址：`http://127.0.0.1:7985`
 
-### 前端 -> 後端 (JSON)
+## 前端串接步驟
 
-- `request.ping`
+最小串接流程如下：
+
+1. 連線 `ws://${location.host}/ws`
+2. `onopen` 送 `request.session`
+3. 收到 `response.session` 後送 `request.set_system_prompt`
+4. 每 100ms 上傳一包 PCM `ArrayBuffer`
+5. 依 `response.asr_text.status` 更新 UI
+
+可直接參考 [frontend/js/all.js](frontend/js/all.js) 的 `connect_ws`、`startRecording`。
+
+## WebSocket 協定
+
+### Client -> Server (JSON)
+
+1. `request.ping`
+
 ```json
 { "type": "request.ping" }
 ```
 
-- `request.session`
+2. `request.session`
+
 ```json
 { "type": "request.session" }
 ```
 
-- `request.set_system_prompt`
+3. `request.set_system_prompt`
+
 ```json
 {
-	"type": "request.set_system_prompt",
-	"session_id": "<session_id>",
-	"system_prompt": "你是一個帶有幽默感的語言模型，請用中文回答問題。"
+  "type": "request.set_system_prompt",
+  "session_id": "<session_id>",
+  "system_prompt": "<Prompt text>"
+}
+```
+4. `input_audio_buffer.append`
+```json
+{
+  "type": "input_audio_buffer.append",
+  "audio_data": "<Base64 encoded PCM data>"
 }
 ```
 
-### 前端 -> 後端 (Bytes)
+### Client -> Server (Binary)
 
-- **PCM 音訊串流**：直接送出 `ArrayBuffer`，格式為 24kHz / 16-bit / mono。
+- 音訊型態：PCM bytes (`ArrayBuffer`)、Base64 編碼的 PCM 字串
+- 建議規格：24kHz / 16-bit / mono
+- 後端會重採樣為 16kHz 後送 ASR
+- 如果前端選擇以json格式送出音訊，請確保base64編碼後的字串不會太大，以免造成WebSocket傳輸問題
 
-### 後端 -> 前端 (JSON)
+### Server -> Client (JSON)
 
-- `response.ping`
+1. `response.ping`
+
 ```json
 { "type": "response.ping", "msg": "pong" }
 ```
 
-- `response.session`
-```json
-{ "type": "response.session", "session_id": "<session_id>", "msg": "Session created" }
-```
+2. `response.session`
 
-- `response.asr_text`
 ```json
 {
-	"type": "response.asr_text",
-	"text": "辨識到的文字",
-	"language": "zh",
-	"status": "streaming"
+  "type": "response.session",
+  "session_id": "<session_id>",
+  "msg": "Session created with ID: <session_id>"
 }
 ```
 
-## 後續開發
+3. `response.asr_text`
 
-- 整合 LLM 回覆 (Azure OpenAI)
-- 整合 TTS 回覆 (如 Fish Speech)
+```json
+{
+  "type": "response.asr_text",
+  "text": "今天天氣如何？",
+  "language": "",
+  "status": "partial"
+}
+```
+
+`status` 說明：
+
+- `partial`：即時更新，通常用來更新右側字幕
+- `final`：完整斷句，通常用來新增一則對話泡泡
+
+## 前端最小範例
+
+```javascript
+const ws = new WebSocket(`ws://${location.host}/ws`);
+let sessionId = null;
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({ type: "request.session" }));
+};
+
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+
+  if (msg.type === "response.session") {
+    sessionId = msg.session_id;
+    ws.send(JSON.stringify({
+      type: "request.set_system_prompt",
+      session_id: sessionId,
+      system_prompt: "這裡放你想要的 System Prompt"
+    }));
+    return;
+  }
+
+  if (msg.type === "response.asr_text") {
+    if (msg.status === "partial") {
+      document.querySelector("#transcript").textContent = msg.text;
+    }
+
+    if (msg.status === "final") {
+      const li = document.createElement("li");
+      li.textContent = msg.text;
+      document.querySelector("#messages").appendChild(li);
+      document.querySelector("#transcript").textContent = "";
+    }
+  }
+};
+
+function sendPcmChunk(arrayBuffer) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(arrayBuffer);
+  }
+}
+```
+
+## 故障排查
+
+1. 連不上 `/ws`
+
+- 確認後端服務在 `127.0.0.1:7985`
+- 確認前端不是連到錯誤 host 或 port
+
+2. 有 `partial`，但沒有 `final`
+
+- 確認後端 log 有 `VAD 偵測到停頓`
+- 測試時請刻意停頓約 1 到 2 秒
+
+3. 一直出現重複字幕
+
+- 先檢查是否重複綁定 `onmessage`
+- 前端可增加一層 final 去重 (以最後一句文字比對)
+
+4. 文字內容有簡繁差異或標點不同
+
+- 屬 ASR 輸出特性，非串接錯誤
+5. 如果語音為英文，但 ASR 輸出中文這不是系統錯誤，而是 ASR 模型的語言預測結果。請聯絡開發團隊調整 ASR 模型的語言設定。
+
+## 開發現況
+
+- 已完成：即時串流、VAD 斷句、ASR 結果回推、session 音訊存檔
+- 待擴充：LLM 回覆串流、TTS 回傳音訊
