@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Optional
 
 import numpy as np
-# import pyaudio
 from scipy.io import wavfile
 import onnxruntime as ort
 
@@ -29,7 +28,7 @@ VAD_THRESHOLD = 0.7             # 语音概率阈值
 PRE_SPEECH_MS = 200             # 触发前保留的毫秒数
 
 # --- 动态端点检测配置 ---
-EARLY_CHECK_MS = 1200            # 静音后多久开始第一次检测
+EARLY_CHECK_MS = 1500            # 静音后多久开始第一次检测
 CHECK_INTERVAL_MS = 150         # 基础检测间隔
 MIN_CHECK_INTERVAL_MS = 100      # 高置信度时的最小检测间隔
 MAX_STOP_MS = 2500              # 最大静音等待时间（兜底）

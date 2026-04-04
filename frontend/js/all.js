@@ -23,6 +23,8 @@ const sampleRate = 24000;
 const sampleBits = 16;
 const numChannels = 1; // mono
 
+const message_html_template = (text, role) => `<div class="bubble ${role}-bubble">${text}</div>`;
+
 // ============================心跳機制=============================\\
 function startHeartbeat() {
     if (heartbeatInterval) return;
@@ -68,7 +70,6 @@ async function startRecording() {
                 // getNextData() 回傳 PCM ArrayBuffer
                 let pcmData = recorder.getNextData();
                 if (pcmData && pcmData.byteLength > 0) {
-                    console.log("送出 PCM 數據:", pcmData);
                     ws.send(pcmData);
                 }
             }
@@ -181,12 +182,28 @@ const connect_ws = () => {
 
             if (msg.type === "response.asr_text") {
                 // 如果是即時語音辨識的結果，就印出來
-                if (msg.text) {
+                if (msg.text && msg.text.trim().length > 0 && msg.status === "partial") {
                     console.log(`辨識結果 [${msg.language}]:`, msg.text);
                     // 這裡可以把 msg.text 寫入到 HTML 的某個 <div> 裡讓使用者看到！
                     document.getElementById('transcript-text').innerText = msg.text;
+                    console.log("ASR 結果: ", msg.text);
+                } else if (msg.status === "final") {
+                    console.log("VAD 偵測到停頓，ASR 結算中...");
+                    let finalText = document.getElementById('transcript-text').innerText || "";
+                    console.log(`最終辨識結果 [${msg.language}]:`, finalText);
+                    // 這裡可以把 msg.text 寫入到 HTML 的某個 <div> 裡讓使用者看到！
+                    let message_html = message_html_template(finalText, "user");
+                    document.getElementById('message_area').insertAdjacentHTML('beforeend', message_html);
+                    console.log("ASR 最終結果: ", finalText);
                 }
             };
+
+            if (msg.type === "response.vad_pause") {
+                console.log("VAD 偵測到停頓，ASR 結算中...");
+                let currentText = msg.text || "";
+                message_html = message_html_template(currentText, "user");
+                document.getElementById('message_area').insertAdjacentHTML('beforeend', message_html);
+            }
         };
     });
 };
@@ -249,7 +266,7 @@ async function toggleCall() {
         muteBtn.classList.remove('muted');
         setTimeout(() => {
             if (!isInCall) statusText.innerHTML = '準備就緒';
-            document.getElementById('transcript-text').innerText = "(這裡會顯示轉錄文字)";
+            // document.getElementById('transcript-text').innerText = "(這裡會顯示轉錄文字)";
         }, 2000);
     }
 }

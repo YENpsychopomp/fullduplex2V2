@@ -2,6 +2,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import os
 import uuid
+import logging
+
+logger = logging.getLogger("uvicorn.error")
 
 @dataclass
 class AudioFormat:
@@ -16,6 +19,7 @@ class SessionData:
     system_prompt: str = field(default="你是一個帶有幽默感的語言模型，請用中文回答問題。")
     audio_formate: AudioFormat = field(default_factory=AudioFormat)
     audio_buffer: bytes = field(default_factory=bytes)
+    ASR_history: list = field(default_factory=list)
 
 class SessionManager:
     def __init__(self):
@@ -50,3 +54,15 @@ class SessionManager:
     def close_session(self, session_id):
         if session_id in self.sessions:
             del self.sessions[session_id]
+    
+    def save_asr_result(self, session_id, asr_result):
+        session = self.sessions.get(session_id)
+        if not session or not asr_result:
+            return False
+
+        if session.ASR_history and session.ASR_history[-1] == asr_result:
+            return False
+
+        session.ASR_history.append(asr_result)
+        logger.info(f"Session {session_id} ASR history updated: {session.ASR_history}")
+        return True
