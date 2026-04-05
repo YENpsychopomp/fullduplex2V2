@@ -22,11 +22,13 @@ import numpy as np
 
 from sessions_manager import SessionManager, SessionData, AudioFormat
 from vad import record_and_predict, ensure_model
+from agent import StreamingVoiceAgent
 
 load_dotenv()
 app = FastAPI(title="full-duplex2")
 logger = logging.getLogger("uvicorn.error")
 session_manager = SessionManager()
+voice_agent = StreamingVoiceAgent(logger)
 isfinish = False
 asr_generation = 0
 asr_finalized_generation = 0
@@ -79,6 +81,36 @@ async def websocket_endpoint(websocket: WebSocket):
                 nonlocal full_transcript
                 global isfinish, asr_generation, asr_finalized_generation
 
+                async def _process_agent(transcript):
+                    """將字串交給 Agent 並串流回傳"""
+                    if not current_session_id:
+                        return
+                    session_info = session_manager.get_session_info(current_session_id)
+                    if not session_info:
+                        return
+                        
+                    history = session_info.chat_history[:-1] # 不含當前這句，因為 ASR 當前句子由下面 user_text 帶入
+                    system_prompt = session_info.system_prompt
+                    
+                    full_reply = ""
+                    async for chunk in voice_agent.stream_chat(transcript, history, system_prompt):
+                        full_reply += chunk
+                        await websocket.send_text(json.dumps({
+                            "type": "response.agent_text",
+                            "text": full_reply,
+                            "status": "partial"
+                        }))
+                    
+                    # 傳送最終 Agent 回覆
+                    await websocket.send_text(json.dumps({
+                        "type": "response.agent_text",
+                        "text": full_reply,
+                        "status": "final"
+                    }))
+                    
+                    # 存入 Session 歷史紀錄
+                    session_manager.save_agent_result(current_session_id, full_reply)
+
                 async def _flush_final(asr_result, force_finalize=False):
                     """將目前累積字幕視情況結算成 final，避免卡到下一輪才觸發。"""
                     nonlocal full_transcript
@@ -95,6 +127,10 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "status": "final"
                             }))
                             logger.info(f"ASR 最終結果: {transcript}")
+                            
+                            # -------- 觸發 Agent 處理 --------
+                            asyncio.create_task(_process_agent(transcript))
+
                         full_transcript = ""
 
                     if force_finalize and isfinish:

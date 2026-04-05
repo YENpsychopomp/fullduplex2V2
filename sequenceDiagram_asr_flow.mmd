@@ -1,0 +1,50 @@
+---
+config:
+  theme: default
+---
+
+sequenceDiagram
+    participant Frontend as 客戶端 (Web)
+    participant FastAPI as 後端 (FastAPI WebSocket)
+    participant VAD as 語音偵測模組 (VAD)
+    participant ASR as 語音辨識 (Qwen ASR)
+
+    Note over Frontend, ASR: 【第一階段：持續收音與傳輸】
+    
+    Frontend->>Frontend: 初始化錄音 (16kHz, mono, PCM)
+    loop 每 100ms
+        Frontend->>FastAPI: 傳送 PCM 音訊 (WebSocket Binary/JSON)
+        FastAPI->>VAD: record_and_predict(audio_bytes)
+        VAD-->>FastAPI: endpoint_detected (False)
+        
+        FastAPI->>ASR: input_audio_buffer.append(audio)
+        
+        opt ASR 內部推論 (Streaming)
+            ASR-->>FastAPI: transcription.delta (帶有 language / <asr_text>)
+            Note over FastAPI: 隱藏 <asr_text> 前的系統提示字元\n避免 "language", "Chinese" 漏出
+            FastAPI-->>Frontend: response.asr_text (status: partial)
+        end
+    end
+
+    Note over Frontend, ASR: 【第二階段：VAD 觸發與 ASR 結算】
+
+    Frontend->>FastAPI: 傳送 PCM 音訊 (使用者剛說完)
+    FastAPI->>VAD: record_and_predict(audio_bytes)
+    Note over VAD: 靜音置信度達標、\n或超過最大停頓時間
+    VAD-->>FastAPI: endpoint_detected (True)
+
+    FastAPI->>ASR: input_audio_buffer.commit()
+    Note right of FastAPI: 通知 ASR 停止等待，立即結算這句話
+
+    ASR-->>FastAPI: transcription.done / response.done
+    Note over FastAPI: 清空該句暫存 buffer，重置 wait_for_asr_text 狀態
+    FastAPI-->>Frontend: response.asr_text (status: final)
+
+    Note over Frontend, ASR: 【第三階段：進入 LLM 思考】
+    FastAPI->>FastAPI: Cancel 先前的 LLM 任務 (若有)
+    FastAPI->>FastAPI: 將 ASR Final text 放入 LLM Queue
+    FastAPI-->>Frontend: response.llm_start
+    
+    Note right of FastAPI: LLM 串流回覆...
+    FastAPI-->>Frontend: response.llm_delta (text chunks)
+    FastAPI-->>Frontend: response.llm_done

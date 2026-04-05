@@ -20,6 +20,7 @@ class SessionData:
     audio_formate: AudioFormat = field(default_factory=AudioFormat)
     audio_buffer: bytes = field(default_factory=bytes)
     ASR_history: list = field(default_factory=list)
+    chat_history: list = field(default_factory=list) # [{'role': '...', 'content': '...'}]
 
 class SessionManager:
     def __init__(self):
@@ -64,5 +65,16 @@ class SessionManager:
             return False
 
         session.ASR_history.append(asr_result)
+        # 同時存入 chat_history 供 Agent 使用
+        session.chat_history.append({"role": "user", "content": asr_result})
         logger.info(f"Session {session_id} ASR history updated: {session.ASR_history}")
+        return True
+        
+    def save_agent_result(self, session_id, agent_result):
+        session = self.sessions.get(session_id)
+        if not session or not agent_result:
+            return False
+            
+        session.chat_history.append({"role": "assistant", "content": agent_result})
+        logger.info(f"Session {session_id} Agent history updated.")
         return True

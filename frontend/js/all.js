@@ -189,12 +189,21 @@ const connect_ws = () => {
                     console.log("ASR 結果: ", msg.text);
                 } else if (msg.status === "final") {
                     console.log("VAD 偵測到停頓，ASR 結算中...");
-                    let finalText = document.getElementById('transcript-text').innerText || "";
+                    let finalText = msg.text || document.getElementById('transcript-text').innerText || "";
                     console.log(`最終辨識結果 [${msg.language}]:`, finalText);
                     // 這裡可以把 msg.text 寫入到 HTML 的某個 <div> 裡讓使用者看到！
                     let message_html = message_html_template(finalText, "user");
                     document.getElementById('message_area').insertAdjacentHTML('beforeend', message_html);
                     console.log("ASR 最終結果: ", finalText);
+                    document.getElementById('transcript-text').innerText = "";
+                }
+            } else if (msg.type === "response.agent_text") {
+                if (msg.status === "partial") {
+                    document.getElementById('agent-transcript-text').innerText = msg.text;
+                } else if (msg.status === "final") {
+                    let message_html = message_html_template(msg.text, "ai");
+                    document.getElementById('message_area').insertAdjacentHTML('beforeend', message_html);
+                    document.getElementById('agent-transcript-text').innerText = "";
                 }
             };
 
