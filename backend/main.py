@@ -73,42 +73,42 @@ async def websocket_endpoint(websocket: WebSocket):
             await asr_ws.send(json.dumps({"type": "session.update", "model": WS_ASR_MODEL_NAME}))
             logger.info("成功連線到 ASR 伺服器！")
             
+            async def _process_agent(transcript):
+                """將字串交給 Agent 並串流回傳"""
+                if not current_session_id:
+                    return
+                session_info = session_manager.get_session_info(current_session_id)
+                if not session_info:
+                    return
+                    
+                history = session_info.chat_history[:-1] # 不含當前這句，因為 ASR 當前句子由下面 user_text 帶入
+                system_prompt = session_info.system_prompt
+                
+                full_reply = ""
+                async for chunk in voice_agent.stream_chat(transcript, history, system_prompt):
+                    full_reply += chunk
+                    await websocket.send_text(json.dumps({
+                        "type": "response.agent_text",
+                        "text": full_reply,
+                        "status": "partial"
+                    }))
+                
+                # 傳送最終 Agent 回覆
+                await websocket.send_text(json.dumps({
+                    "type": "response.agent_text",
+                    "text": full_reply,
+                    "status": "final"
+                }))
+                
+                # 存入 Session 歷史紀錄
+                session_manager.save_agent_result(current_session_id, full_reply)
+
             # ==========================================
             # 任務 A：專門負責接收 ASR 回傳的文字，並轉發給前端
             # ==========================================
             async def receive_from_asr():
                 nonlocal full_transcript
                 global isfinish, asr_generation, asr_finalized_generation
-
-                async def _process_agent(transcript):
-                    """將字串交給 Agent 並串流回傳"""
-                    if not current_session_id:
-                        return
-                    session_info = session_manager.get_session_info(current_session_id)
-                    if not session_info:
-                        return
-                        
-                    history = session_info.chat_history[:-1] # 不含當前這句，因為 ASR 當前句子由下面 user_text 帶入
-                    system_prompt = session_info.system_prompt
-                    
-                    full_reply = ""
-                    async for chunk in voice_agent.stream_chat(transcript, history, system_prompt):
-                        full_reply += chunk
-                        await websocket.send_text(json.dumps({
-                            "type": "response.agent_text",
-                            "text": full_reply,
-                            "status": "partial"
-                        }))
-                    
-                    # 傳送最終 Agent 回覆
-                    await websocket.send_text(json.dumps({
-                        "type": "response.agent_text",
-                        "text": full_reply,
-                        "status": "final"
-                    }))
-                    
-                    # 存入 Session 歷史紀錄
-                    session_manager.save_agent_result(current_session_id, full_reply)
 
                 async def _flush_final(asr_result, force_finalize=False):
                     """將目前累積字幕視情況結算成 final，避免卡到下一輪才觸發。"""

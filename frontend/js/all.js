@@ -159,7 +159,6 @@ const connect_ws = () => {
                 console.warn("無法解析 ws 訊息", event.data);
                 return;
             }
-            // if (!msg || typeof msg.type !== "string") return;
             if (msg.type == "response.pong") {
                 console.log("收到 pong");
                 return;
@@ -183,14 +182,14 @@ const connect_ws = () => {
             if (msg.type === "response.asr_text") {
                 // 如果是即時語音辨識的結果，就印出來
                 if (msg.text && msg.text.trim().length > 0 && msg.status === "partial") {
-                    console.log(`辨識結果 [${msg.language}]:`, msg.text);
+                    console.log(`辨識結果:`, msg.text);
                     // 這裡可以把 msg.text 寫入到 HTML 的某個 <div> 裡讓使用者看到！
                     document.getElementById('transcript-text').innerText = msg.text;
                     console.log("ASR 結果: ", msg.text);
                 } else if (msg.status === "final") {
                     console.log("VAD 偵測到停頓，ASR 結算中...");
                     let finalText = msg.text || document.getElementById('transcript-text').innerText || "";
-                    console.log(`最終辨識結果 [${msg.language}]:`, finalText);
+                    console.log(`最終辨識結果:`, finalText);
                     // 這裡可以把 msg.text 寫入到 HTML 的某個 <div> 裡讓使用者看到！
                     let message_html = message_html_template(finalText, "user");
                     document.getElementById('message_area').insertAdjacentHTML('beforeend', message_html);
@@ -201,6 +200,7 @@ const connect_ws = () => {
                 if (msg.status === "partial") {
                     document.getElementById('agent-transcript-text').innerText = msg.text;
                 } else if (msg.status === "final") {
+                    console.log("LLM 回答: ", msg.text);
                     let message_html = message_html_template(msg.text, "ai");
                     document.getElementById('message_area').insertAdjacentHTML('beforeend', message_html);
                     document.getElementById('agent-transcript-text').innerText = "";
