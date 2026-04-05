@@ -17,7 +17,6 @@ import requests
 import uvicorn
 import base64
 import websockets
-import librosa
 import numpy as np
 
 from sessions_manager import SessionManager, SessionData, AudioFormat
@@ -173,6 +172,19 @@ async def websocket_endpoint(websocket: WebSocket):
                         await _flush_final(asr_result, force_finalize=True)
 
             # ==========================================
+            # 任務 C：獨立的 VAD 駐列與處理，防止卡住收發
+            # ==========================================
+            vad_queue = asyncio.Queue()
+            async def process_vad():
+                while True:
+                    audio_bytes = await vad_queue.get()
+                    # 將 VAD 處理丟入獨立執行緒，避免阻塞 WebSocket Event Loop
+                    is_pause = await asyncio.to_thread(record_and_predict, audio_bytes)
+                    if is_pause:
+                        logger.info("VAD 偵測到停頓，通知 ASR 結算...")
+                        await _send_finish_stream(asr_ws, "pause_detected")
+
+            # ==========================================
             # 任務 B：專門負責接收前端訊息，並轉發給 ASR
             # ==========================================
             async def receive_from_frontend():
@@ -215,59 +227,45 @@ async def websocket_endpoint(websocket: WebSocket):
                             if base64_audio:
                                 audio_bytes = base64.b64decode(base64_audio)
                                 
-                                # 重採樣流程
-                                pcm_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                                resampled_float = librosa.resample(pcm_data, orig_sr=24000, target_sr=16000)
-                                resampled_int16 = (resampled_float * 32767.0).clip(-32768, 32767).astype(np.int16)
-                                resampled_bytes = resampled_int16.tobytes()
-
                                 if current_session_id:
                                     session_info = session_manager.get_session_info(current_session_id)
                                     if session_info:
-                                        session_info.audio_buffer += resampled_bytes
-                                if record_and_predict(resampled_bytes):
-                                    logger.info("VAD 偵測到停頓，通知 ASR 結算...")
-                                    await _send_finish_stream(asr_ws, "pause_detected")
+                                        session_info.audio_buffer += audio_bytes
+                                        
+                                vad_queue.put_nowait(audio_bytes)
                                 
                                 # 傳送音訊給 ASR
                                 await asr_ws.send(json.dumps({
                                     "type": "input_audio_buffer.append",
-                                    "audio": base64.b64encode(resampled_bytes).decode("utf-8"),
+                                    "audio": base64_audio,
                                 }))
                                 
                     elif "bytes" in raw_msg and raw_msg["bytes"]:
                         audio_bytes = raw_msg["bytes"]
                         
-                        # 重採樣流程
-                        pcm_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                        resampled_float = librosa.resample(pcm_data, orig_sr=24000, target_sr=16000)
-                        resampled_int16 = (resampled_float * 32767.0).clip(-32768, 32767).astype(np.int16)
-                        resampled_bytes = resampled_int16.tobytes()
-
                         if current_session_id:
                             session_info = session_manager.get_session_info(current_session_id)
                             if session_info:
-                                session_info.audio_buffer += resampled_bytes
+                                session_info.audio_buffer += audio_bytes
+
+                        vad_queue.put_nowait(audio_bytes)
 
                         # 傳送音訊給 ASR
                         await asr_ws.send(json.dumps({
                             "type": "input_audio_buffer.append",
-                            "audio": base64.b64encode(resampled_bytes).decode("utf-8"),
+                            "audio": base64.b64encode(audio_bytes).decode("utf-8"),
                         }))
-
-                        if record_and_predict(resampled_bytes):
-                            logger.info("VAD 偵測到停頓，通知 ASR 結算...")
-                            await _send_finish_stream(asr_ws, "pause_detected")
 
             # ==========================================
             # 啟動雙向監控：任一方斷線，另一方立刻安全終止
             # ==========================================
             task_asr = asyncio.create_task(receive_from_asr())
             task_frontend = asyncio.create_task(receive_from_frontend())
+            task_vad = asyncio.create_task(process_vad())
 
-            # 等待兩個任務中「最先結束」的那個 (FIRST_COMPLETED)
+            # 等待任務中「最先結束」的那個 (FIRST_COMPLETED)
             done, pending = await asyncio.wait(
-                [task_asr, task_frontend],
+                [task_asr, task_frontend, task_vad],
                 return_when=asyncio.FIRST_COMPLETED
             )
 

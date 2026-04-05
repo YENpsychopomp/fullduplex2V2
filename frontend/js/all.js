@@ -19,7 +19,7 @@ const waveformEl = document.querySelector('.waveform');
 const waveBars = waveformEl ? Array.from(waveformEl.querySelectorAll('.wave-bar')) : [];
 
 
-const sampleRate = 24000;
+const sampleRate = 16000;
 const sampleBits = 16;
 const numChannels = 1; // mono
 
@@ -60,7 +60,7 @@ async function startRecording() {
     try {
         // 請求麥克風權限並開始錄音
         await recorder.start();
-        console.log("錄音已開始 (24kHz, 16-bit PCM)");
+        console.log("錄音已開始 (16kHz, 16-bit PCM)");
 
         startWaveformLoop();
 
