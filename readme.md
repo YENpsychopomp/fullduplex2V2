@@ -110,7 +110,7 @@ python main.py
 ```json
 {
   "type": "input_audio_buffer.append",
-  "audio_data": "<Base64 encoded PCM data>"
+  "audio": "<Base64 encoded PCM data>"
 }
 ```
 
