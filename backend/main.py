@@ -18,6 +18,8 @@ import uvicorn
 import base64
 import websockets
 import numpy as np
+import httpx
+import aiofiles
 
 from sessions_manager import SessionManager, SessionData, AudioFormat
 from vad import record_and_predict, ensure_model
@@ -60,6 +62,70 @@ async def _send_finish_stream(asr_ws, reason="VAD_detected_pause"):
     isfinish = True
     asr_generation += 1
 
+async def tts(text: str, websocket: WebSocket):
+    # 確保每次呼叫產生獨立的 UUID 與時間戳
+    output_path = f"backend/recorder/{uuid.uuid4()}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.wav"
+    url = os.getenv("TTS_URL")
+    headers = {
+        "Authorization": os.getenv("TTS_API_KEY"),
+        "Content-Type": "application/json"
+    }
+
+    files = ["backend/xiaoxin_audio1.mp3", "backend/xiaoxin_audio2.mp3", "backend/xiaoxin_audio3.mp3", "backend/xiaoxin_audio4.mp3", "backend/xiaoxin_audio5.mp3", "backend/xiaoxin_audio6.mp3", "backend/xiaoxin_audio7.mp3"]
+    base64_files = []
+    
+    # 初始化階段的磁碟讀取可保持同步，因僅在啟動時執行一次
+    for f in files:
+        with open(f, "rb") as audio_file:
+            encoded_string = base64.b64encode(audio_file.read()).decode("utf-8")
+            base64_files.append(encoded_string)
+            
+    references = [
+        {"audio": base64_files[0], "text": "奪回足球大作戰喔!"},
+        {"audio": base64_files[1], "text": "失敗了"},
+        {"audio": base64_files[2], "text": "不愧是你最嚮往的醫生角色完全融入了喔!"},
+        {"audio": base64_files[3], "text": "這張臉跟風間一模一樣欸!"},
+        {"audio": base64_files[4], "text": "好!"},
+        {"audio": base64_files[5], "text": "爸爸在這裡喔!"},
+        {"audio": base64_files[6], "text": "丟掉了汪!而且他還在看你喔"},
+    ]
+
+    data = {
+        "model": "fish-speech-server",
+        "text": text,
+        "references": references,
+        "format": "wav",
+        "normalize": True,
+        "speed": 1.0
+    }
+    
+    logger.info(f"正在發送 TTS 請求...")
+    try:
+        # 使用 httpx 完成非同步 POST 防止阻塞 Event Loop
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=data, timeout=60.0)
+            
+        if response.status_code == 200:
+            # 使用非同步 I/O 寫入檔案，避免大檔案阻塞 Event Loop
+            logger.info(f"response_info: {response.status_code}, {response.headers}")
+            async with aiofiles.open(output_path, "wb") as f:
+                await f.write(response.content)
+            logger.info(f"✅ 語音合成成功！已儲存為 {output_path}")
+            
+            # 轉換為 Base64 傳給前端
+            audio_base64 = base64.b64encode(response.content).decode("utf-8")
+            await websocket.send_text(json.dumps({
+                "type": "response.agent_audio",
+                "audio": audio_base64
+            }))
+        else:
+            logger.error(f"❌ 合成失敗，狀態碼: {response.status_code}, 訊息: {response.text}")
+
+    except httpx.RequestError as e:
+        logger.error(f"💥 網路請求發生錯誤: {e}")
+    except Exception as e:
+        logger.error(f"💥 發生未知錯誤: {e}")
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -101,6 +167,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 "text": full_reply,
                 "status": "final"
             }))
+            
+            # 使用 TTS 合成語音並透過 WebSocket 發送給前端
+            await tts(full_reply, websocket)
             
             # 存入 Session 歷史紀錄
             session_manager.save_agent_result(current_session_id, full_reply)

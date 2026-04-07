@@ -205,6 +205,11 @@ const connect_ws = () => {
                     document.getElementById('message_area').insertAdjacentHTML('beforeend', message_html);
                     document.getElementById('agent-transcript-text').innerText = "";
                 }
+            } else if (msg.type === "response.agent_audio") {
+                console.log("收到音訊資料準備播放...");
+                let audioSrc = "data:audio/wav;base64," + msg.audio;
+                let audioObj = new Audio(audioSrc);
+                audioObj.play().catch(e => console.error("音訊播放失敗: ", e));
             };
 
             if (msg.type === "response.vad_pause") {
