@@ -1,17 +1,18 @@
-﻿# full-duplex2 語音助理專案
+# full-duplex2 語音助理專案
 
-全雙工語音串流示範專案，提供「前端錄音 -> 後端轉送 ASR -> VAD 斷句 -> 前端即時字幕 -> AI 語言模型思考 -> 前端即時回覆」的完整流程。
+全雙工語音串流示範專案，提供「前端錄音 -> 後端轉送 ASR -> VAD 斷句 -> 前端即時字幕 -> AI 語言模型思考 -> TTS 語音合成 -> 前端即時回覆及播放」的完整流程。
 
 ## 專案概述
 
-本專案聚焦在語音與 AI 助理的串接，目標是讓前端可以用最簡單的方式接收即時的語音辨識與 AI 回覆。前端只需要處理 WebSocket 收到什麼訊息就顯示什麼畫面。
+本專案聚焦在語音與 AI 助理的串接，目標是讓前端可以用最簡單的方式接收即時的語音辨識與 AI 回覆。前端只需要處理 WebSocket 收到什麼訊息就顯示什麼畫面或播放什麼聲音。
 
-目前後端會給前端兩種主要的訊息：
+目前後端會給前端三種主要的訊息：
 
 1. **ASR (語音辨識) 字幕**：`response.asr_text`，這代表使用者講的話。
 2. **Agent (AI) 回覆**：`response.agent_text`，這代表 AI 回答的話。
+3. **Agent (AI) 語音**：`response.agent_audio`，這代表 AI 回答的聲音檔。
 
-這兩種訊息都會有兩種狀態：
+這兩種文字訊息都會有兩種狀態：
 - `partial`：即時正在輸入的字（像打字機一樣，建議拿來更新畫面上的同一個對話泡泡或暫存區）。
 - `final`：完整的一句話（代表講完了，建議拿來正式新增一個完整的對話泡泡到畫面上）。
 
@@ -20,14 +21,16 @@
 2. 後端收到後轉送給語音辨識分析。
 3. 當後端發現「使用者停頓不講話了」(透過 VAD 技術)，就會告訴前端這句使用者講的話結束了 (`final`)。
 4. 接著後端會自動把這句話丟給 AI 思考，並將 AI 的回覆一段一段透過 WebSocket (`response.agent_text`) 傳給前端。
+5. AI 的文字回覆會自動送給 TTS (語音合成) 產生音訊檔，並透過 WebSocket (`response.agent_audio`) 傳給前端，前端依序播放。
 
 ## 架構
 
-- 前端：只負責錄音、丟音軌給後端、取得文字時更新畫面 (JS `Recorder`)。
+- 前端：只負責錄音、丟音軌給後端、取得文字時更新畫面及依序播放語音 (JS `Recorder` + 佇列機制)。
 - 後端：FastAPI WebSocket，你的老家就是 `/ws`。
 - ASR (語音辨識)：遠端即時辨識 (Qwen)。
 - VAD (斷句系統)：我們用它去判斷使用者「什麼時候不講話了」，以此來觸發 AI 講話。
 - Agent (AI)：內建天氣、路況查詢與自由聊天的語言模型 (LangChain + Azure OpenAI)。
+- TTS (語音合成)：負責將 AI 代理回覆的文字串轉成音軌回傳給前端。
 
 相關文件：
 
@@ -39,17 +42,29 @@
 
 - Python 3.10+
 - 可用的 ASR gateway
+- 可用的 TTS 伺服器 (如 Fish Speech 等)
 - 瀏覽器麥克風權限
 
 ## 後端設定與啟動
 
-### 1. 設定環境變數
+### 1. 安裝環境與依賴套件
+
+建議使用虛擬環境：
+```bash
+pip install -r requirements.txt
+```
+
+若有需要本地快取與啟動 Qwen 模型，可執行 `python backend/download_model.py` 預先下載。
+
+### 2. 設定環境變數
 
 [backend/main.py](backend/main.py) 會讀取：
 
 - `WS_ASR_URL`
 - `WS_ASR_API_KEY`
 - `WS_ASR_MODEL_NAME`
+- `TTS_URL`
+- `TTS_API_KEY`
 
 建議在專案根目錄建立 `.env`：
 
@@ -57,9 +72,11 @@
 WS_ASR_URL=wss://your-asr-gateway/realtime
 WS_ASR_API_KEY=your_key
 WS_ASR_MODEL_NAME=qwen3-asr-1.7b
+TTS_URL=http://your-tts-server/v1/tts
+TTS_API_KEY=your_tts_key
 ```
 
-### 2. 啟動服務
+### 3. 啟動服務
 
 ```bash
 cd backend
@@ -68,9 +85,9 @@ python main.py
 
 預設網址：`http://127.0.0.1:7985`
 
-## 前端串接步驟 (超簡單)
+## 前端串接步驟
 
-你只需要準備以下幾個動作：
+你需要準備以下幾個動作：
 
 1. 連線至 WebSocket：`ws://${location.host}/ws`
 2. WebSocket 開啟 (`onopen`) 後先發送： `{ type: "request.session" }`
@@ -165,14 +182,39 @@ python main.py
 }
 ```
 
+5. **`response.agent_audio`** (AI 在說話的語音檔案)
+
+```json
+{
+  "type": "response.agent_audio",
+  "audio": "<Base64 encoded WAV data>"
+}
+```
+
 ## 前端最小串接範例 (Copy & Paste)
 
 只要看懂這段 JavaScript 結構，基本上你就會接了！
 
 ```javascript
-/* 前端：建立 WebSocket 與處理畫面 */
+/* 前端：建立 WebSocket 與處理畫面/播放語音 */
 const ws = new WebSocket(`ws://${location.host}/ws`);
 let sessionId = null;
+
+// 音訊播放佇列
+let audioQueue = [];
+let isPlayingAudio = false;
+
+function playNextAudio() {
+    if (audioQueue.length === 0) {
+        isPlayingAudio = false;
+        return;
+    }
+    isPlayingAudio = true;
+    let audioSrc = audioQueue.shift();
+    let audioObj = new Audio(audioSrc);
+    audioObj.onended = () => { playNextAudio(); };
+    audioObj.play().catch(e => console.error("音訊播放失敗: ", e));
+}
 
 ws.onopen = () => {
   // 1. 連線成功，告訴後端我要開房間 (session)
@@ -228,6 +270,15 @@ ws.onmessage = (event) => {
       document.querySelector("#ai-live-text").textContent = ""; 
     }
   }
+
+  // 5. 處理「AI (Agent)」回答的語音
+  if (msg.type === "response.agent_audio") {
+    let audioSrc = "data:audio/wav;base64," + msg.audio;
+    audioQueue.push(audioSrc);
+    if (!isPlayingAudio) {
+      playNextAudio();
+    }
+  }
 };
 ```
 
@@ -256,8 +307,3 @@ ws.onmessage = (event) => {
 
 - 確認一下 `.env` 或後端伺服器的 Azure OpenAI 相關變數（`AZURE_OPENAI_ENDPOINT` 等）是否都有設定。
 - 如果沒有設定，預設只會提供內建的「天氣」、「路況」查詢（講話內容必須包含這些關鍵字）。
-
-## 後續待做功能 (To-Do)
-
-- 已完成：即時語音辨識、VAD (語音活動偵測=斷句)、AI文字回覆 (`agent_text`)、Audio 存檔。
-- 未來：TTS（把 AI 文字產生回聲音讓前端可以聽到）。

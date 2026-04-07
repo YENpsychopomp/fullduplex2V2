@@ -64,7 +64,7 @@ async def _send_finish_stream(asr_ws, reason="VAD_detected_pause"):
 
 async def tts(text: str, websocket: WebSocket):
     # 確保每次呼叫產生獨立的 UUID 與時間戳
-    output_path = f"backend/recorder/{uuid.uuid4()}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.wav"
+    # output_path = f"backend/recorder/{uuid.uuid4()}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.wav"
     url = os.getenv("TTS_URL")
     headers = {
         "Authorization": os.getenv("TTS_API_KEY"),
@@ -108,9 +108,9 @@ async def tts(text: str, websocket: WebSocket):
         if response.status_code == 200:
             # 使用非同步 I/O 寫入檔案，避免大檔案阻塞 Event Loop
             logger.info(f"response_info: {response.status_code}, {response.headers}")
-            async with aiofiles.open(output_path, "wb") as f:
-                await f.write(response.content)
-            logger.info(f"✅ 語音合成成功！已儲存為 {output_path}")
+            # async with aiofiles.open(output_path, "wb") as f:
+            #     await f.write(response.content)
+            # logger.info(f"✅ 語音合成成功！已儲存為 {output_path}")
             
             # 轉換為 Base64 傳給前端
             audio_base64 = base64.b64encode(response.content).decode("utf-8")
@@ -153,14 +153,19 @@ async def websocket_endpoint(websocket: WebSocket):
             system_prompt = session_info.system_prompt
             
             full_reply = ""
+            temp_reply = ""
+            end_of_part = [".", "!", "?", "\n", "。", "！", "？", ",", "，"] # 以這些符號作為暫時回覆的切分依據
             async for chunk in voice_agent.stream_chat(transcript, history, system_prompt):
                 full_reply += chunk
+                temp_reply += chunk
                 await websocket.send_text(json.dumps({
                     "type": "response.agent_text",
                     "text": full_reply,
                     "status": "partial"
                 }))
-            
+                if any(temp_reply.endswith(p) for p in end_of_part):
+                    await tts(temp_reply, websocket)
+                    temp_reply = ""  # 切分後清空暫存回覆，等待下一段
             # 傳送最終 Agent 回覆
             await websocket.send_text(json.dumps({
                 "type": "response.agent_text",
@@ -169,8 +174,8 @@ async def websocket_endpoint(websocket: WebSocket):
             }))
             
             # 使用 TTS 合成語音並透過 WebSocket 發送給前端
-            await tts(full_reply, websocket)
-            
+            await tts(temp_reply, websocket)
+            temp_reply = ""
             # 存入 Session 歷史紀錄
             session_manager.save_agent_result(current_session_id, full_reply)
 

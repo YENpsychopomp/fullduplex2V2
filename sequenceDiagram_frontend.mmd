@@ -1,0 +1,52 @@
+---
+config:
+  theme: default
+---
+
+sequenceDiagram
+    participant UI as 使用者介面 (UI)
+    participant JS as 狀態管理 (all.js)
+    participant Rec as 錄音器 (recorder.js)
+    participant WS as WebSocket
+    participant Audio as 音訊播放器 (Audio API)
+
+    UI->>JS: toggleCall() 開始通話
+    JS->>WS: 建立 WebSocket (connect_ws)
+    WS-->>JS: onopen
+    JS->>WS: 送出 request.session
+    WS-->>JS: response.session (session_id)
+    JS->>WS: 送出 request.set_system_prompt
+
+    JS->>Rec: 初始化 Recorder (16kHz, 16-bit, Mono)
+    Rec-->>JS: 麥克風啟動成功
+    JS->>UI: 更新狀態 (正在收音中...)，啟動波形動畫
+
+    loop 每 100ms
+        JS->>Rec: recorder.getNextData()
+        Rec-->>JS: 取得 PCM ArrayBuffer
+        JS->>WS: 若不在靜音狀態則送出 PCM
+    end
+
+    Note over JS, WS: 處理後端訊息 (onmessage)
+    WS-->>JS: 收到 response.asr_text (partial)
+    JS->>UI: 即時更新轉錄文字 (transcript-text)
+
+    WS-->>JS: 收到 response.asr_text (final)
+    JS->>UI: 將整句話新增對話紀錄 (user-bubble)
+    JS->>UI: 清空轉錄字幕 (transcript-text)
+
+    WS-->>JS: 收到 response.agent_text (final)
+    JS->>UI: 將 AI 整句話新增對話紀錄 (ai-bubble)
+
+    Note over JS, Audio: 音訊播放與佇列機制
+    WS-->>JS: 收到 response.agent_audio (包含 Base64 格式的 audio)
+    JS->>JS: 將音檔 src 放進 audioQueue 陣列
+    alt isPlayingAudio == false
+        JS->>JS: playNextAudio()
+    end
+
+    JS->>Audio: new Audio(src), audioObj.play()
+    Audio->>Audio: 播放中...
+    Audio-->>JS: onended (觸發)
+    JS->>JS: playNextAudio() 取出下一段
+    JS->>Audio: 播放下一段...

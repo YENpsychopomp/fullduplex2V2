@@ -1,0 +1,54 @@
+---
+config:
+  theme: default
+---
+
+sequenceDiagram
+    participant User as 使用者
+    participant Browser as 前端 (Web/JS)
+    participant FastAPI as 後端 (WebSocket)
+    participant VAD as 語音活動偵測 (Silero + Smart Turn)
+    participant ASR as 語音辨識 (Qwen)
+    participant Agent as AI 助理 (LangChain/LLM)
+    participant TTS as 語音合成 (Fish Speech)
+
+    User->>Browser: 點擊開始通話
+    Browser->>FastAPI: 建立 WebSocket 連線 (/ws)
+    FastAPI-->>Browser: 回傳 session_id
+    Browser->>FastAPI: 設定 System Prompt
+
+    Note over Browser, ASR: 持續收音與語音辨識階段
+    loop 每 100ms
+        User->>Browser: 說話
+        Browser->>FastAPI: 傳送 PCM 錄音資料 (ArrayBuffer)
+        FastAPI->>VAD: 送入音訊進行端點偵測
+        FastAPI->>ASR: 串流音訊進行辨識 (streaming_transcribe)
+        ASR-->>FastAPI: 回傳中間辨識結果 (partial)
+        FastAPI-->>Browser: response.asr_text (status: partial)
+        Browser->>Browser: 即時更新使用者字幕
+    end
+
+    Note over VAD, TTS: 斷句與 AI 思考階段
+    User->>Browser: 暫停說話 (停頓)
+    VAD->>FastAPI: 偵測到停頓 (Endpoint Detected)
+    FastAPI->>ASR: 結算辨識結果 (finish_stream)
+    ASR-->>FastAPI: 回傳最終辨識結果 (final)
+    FastAPI-->>Browser: response.asr_text (status: final)
+    
+    FastAPI->>Agent: 將最終文字送給 AI 模型 (invoke)
+    Note over Agent: 判斷是否需要呼叫外部工具<br>(天氣、路況等)
+    opt 呼叫工具
+        Agent->>Agent: 執行 Tool (API 請求)
+    end
+    Agent-->>FastAPI: 串流產出回覆文字 (chunk)
+    FastAPI-->>Browser: response.agent_text (status: partial)
+    
+    Note over FastAPI, TTS: 文字轉語音 (TTS) 階段
+    FastAPI->>TTS: 將 AI 回覆的文字送去語音合成
+    TTS-->>FastAPI: 回傳音訊資料 (WAV)
+    FastAPI-->>Browser: response.agent_audio (status: audio)
+    FastAPI-->>Browser: response.agent_text (status: final)
+
+    Note over Browser: 音訊播放佇列機制
+    Browser->>Browser: 將音訊加入 audioQueue
+    Browser->>User: 依序播放語音 (playNextAudio)

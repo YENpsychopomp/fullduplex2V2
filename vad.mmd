@@ -1,6 +1,6 @@
 ---
 config:
-  theme: redux-dark-color
+  theme: default
 ---
 
 sequenceDiagram
@@ -18,26 +18,26 @@ sequenceDiagram
         silero-->>-stream: speech probability P
 
         alt P > VAD_THRESHOLD
-            stream->>logic: 標記 speech，重置 trailing silence
+            stream->>logic: 標記 speech，重置 trailing silence (靜音)
         else P <= VAD_THRESHOLD
             stream->>logic: 累加 trailing silence
         end
 
-        opt 達到 EARLY_CHECK_MS
-            stream->>+smart: submit_async(audio_segment)
-            smart-->>-stream: 背景推論中
+        opt 達到 EARLY_CHECK_MS (例如 1.5s 靜音)
+            stream->>+smart: submit_async(預留的前置音訊)
+            smart-->>-stream: 背景推論中 (非同步)
         end
 
         stream->>smart: get_result_if_ready()
         opt 推論結果可用
-            smart-->>stream: probability (P_turn)
+            smart-->>stream: probability (P_turn/語意完整度)
             stream->>logic: on_check_completed(P_turn)
         end
 
-        alt should_force_end 或 should_end_by_confidence
+        alt should_force_end(超過最大耐心容忍度) 或 should_end_by_confidence(語意非常完整)
             stream->>stream: _reset_state()
-            stream-->>client: True (觸發 ASR commit)
+            stream-->>client: 回傳 True (觸發 ASR commit 與句點)
         else 尚未達結束條件
-            stream-->>client: False (繼續收音)
+            stream-->>client: 回傳 False (繼續收音)
         end
     end

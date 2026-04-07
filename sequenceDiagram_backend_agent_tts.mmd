@@ -1,0 +1,40 @@
+---
+config:
+  theme: default
+---
+
+sequenceDiagram
+    participant main as API Route (main.py)
+    participant session as SessionManager
+    participant Agent as StreamingVoiceAgent (langchain)
+    participant LLM as Azure OpenAI (GPT-4o)
+    participant Tools as 自訂工具 (天氣/路況/緊急專線)
+    participant TTS as Fish Speech Server
+
+    main->>session: 取得歷史對話 (chat_history)
+    main->>Agent: call_streaming_agent(text, chat_history)
+    Agent->>LLM: 丟入 SystemPrompt, 轉錄文字, 對話紀錄, 與工具清單
+    LLM-->>Agent: AI 串流決定要回覆文字 或 呼叫工具
+
+    alt 決定呼叫外部工具
+        Agent->>Tools: tool_call (例：weather_forecast_tool("高雄"))
+        Tools-->>Agent: JSON API 擷取結果 (例：氣溫/降雨)
+        Agent->>LLM: 提供工具結果，要求重新整理回應
+        LLM-->>Agent: 產生最終回覆文字串流...
+    else 若不需工具則直接回覆文字串流
+    end
+
+    loop 每一個文字片段 (chunks)
+        Agent-->>main: yield partial_response (字串組合)
+        main->>Frontend: response.agent_text (status: partial) 即時更新
+    end
+
+    Note over Agent: 取得完整的 AI 文字結果 (final_text)
+    Agent-->>main: yield dict(status=final, text=final_text)
+    main->>Frontend: response.agent_text (status: final) 顯示紀錄
+
+    Note over main, TTS: 將最終 AI 長字串轉為音頻 (TTS) 發送
+    main->>TTS: HTTP POST /v1/tts (text, references[7])
+    TTS-->>main: bytes音檔 (Wave)
+    main->>main: base64.b64encode 取出音軌
+    main->>Frontend: 透過 websocket 送出 response.agent_audio

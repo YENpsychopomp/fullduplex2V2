@@ -10,6 +10,8 @@ let lastWaveLevel = 0;
 let systemPrompt = "你是一個帶有幽默感的語言模型，請用中文回答問題。";
 let sessionId = null;
 let heartbeatInterval = null;
+let audioQueue = [];
+let isPlayingAudio = false;
 
 const headerStatus = document.getElementById('header-status');
 const statusText = document.getElementById('status-text');
@@ -24,6 +26,24 @@ const sampleBits = 16;
 const numChannels = 1; // mono
 
 const message_html_template = (text, role) => `<div class="bubble ${role}-bubble">${text}</div>`;
+
+// ============================音訊播放佇列=============================\\
+function playNextAudio() {
+    if (audioQueue.length === 0) {
+        isPlayingAudio = false;
+        return;
+    }
+    isPlayingAudio = true;
+    let audioSrc = audioQueue.shift();
+    let audioObj = new Audio(audioSrc);
+    audioObj.onended = () => {
+        playNextAudio();
+    };
+    audioObj.play().catch(e => {
+        console.error("音訊播放失敗: ", e);
+        playNextAudio();
+    });
+}
 
 // ============================心跳機制=============================\\
 function startHeartbeat() {
@@ -206,10 +226,12 @@ const connect_ws = () => {
                     document.getElementById('agent-transcript-text').innerText = "";
                 }
             } else if (msg.type === "response.agent_audio") {
-                console.log("收到音訊資料準備播放...");
+                console.log("收到音訊資料加入佇列...");
                 let audioSrc = "data:audio/wav;base64," + msg.audio;
-                let audioObj = new Audio(audioSrc);
-                audioObj.play().catch(e => console.error("音訊播放失敗: ", e));
+                audioQueue.push(audioSrc);
+                if (!isPlayingAudio) {
+                    playNextAudio();
+                }
             };
 
             if (msg.type === "response.vad_pause") {
