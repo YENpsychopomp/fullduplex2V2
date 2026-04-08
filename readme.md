@@ -54,7 +54,7 @@
 pip install -r requirements.txt
 ```
 
-若有需要本地快取與啟動 Qwen 模型，可執行 `python backend/download_model.py` 預先下載。
+若有需要本地快取與啟動 Qwen 模型，可執行 `python backend/download_qwen_asr_model.py` 預先下載。
 
 ### 2. 設定環境變數
 
@@ -66,9 +66,13 @@ pip install -r requirements.txt
 - `TTS_URL`
 - `TTS_API_KEY`
 
-建議在專案根目錄建立 `.env`：
+需要在專案根目錄建立 `.env`：
 
 ```env
+AZURE_OPENAI_ENDPOINT="your_azure_endpoint"
+OPENAI_API_VERSION="your_api_version"
+AZURE_OPENAI_API_KEY="your_azure_api_key"
+AZURE_OPENAI_DEPLOYMENT_NAME="your_deployment_name"
 WS_ASR_URL=wss://your-asr-gateway/realtime
 WS_ASR_API_KEY=your_key
 WS_ASR_MODEL_NAME=qwen3-asr-1.7b
@@ -84,19 +88,20 @@ python main.py
 ```
 
 預設網址：`http://127.0.0.1:7985`
+線上體驗：`https://voice.54ucl.com/realtime/`
 
 ## 前端串接步驟
 
 你需要準備以下幾個動作：
 
-1. 連線至 WebSocket：`ws://${location.host}/ws`
+1. 連線至 WebSocket：`ws://voice.54ucl.com/realtime/ws/`
 2. WebSocket 開啟 (`onopen`) 後先發送： `{ type: "request.session" }`
 3. 收到後端的 `response.session` 以後，就可以開始錄音。
 4. 設定錄音器的頻率為 **16000Hz (16kHz), 16-bit, Mono(單聲道)**。
 5. 設一個 `setInterval` (定時器)，每 100毫秒 (0.1秒) 將錄到的 PCM `ArrayBuffer` 發送 (send) 給 WebSocket。
 6. 寫好 `onmessage` 專門接收 `response.asr_text` (使用者的話) 跟 `response.agent_text` (AI的話)，並用 JavaScript 更新畫面 (`innerText` 或 `innerHTML`)。
 
-可以參考我們寫好的範例檔案：[frontend/js/all.js](frontend/js/all.js) 裡的 `connect_ws()` 以及 `startRecording()`。
+可以參考寫好的範例檔案：[frontend/js/all.js](frontend/js/all.js) 裡的 `connect_ws()` 以及 `startRecording()`。
 
 ## WebSocket 協定
 
@@ -197,7 +202,7 @@ python main.py
 
 ```javascript
 /* 前端：建立 WebSocket 與處理畫面/播放語音 */
-const ws = new WebSocket(`ws://${location.host}/ws`);
+const ws = new WebSocket(`ws://voice.54ucl.com/realtime/ws/`);
 let sessionId = null;
 
 // 音訊播放佇列
@@ -286,7 +291,7 @@ ws.onmessage = (event) => {
 
 1. 連不上 `/ws`
 
-- 確認後端服務在 `127.0.0.1:7985`
+- 確認WebSocket路徑為 `ws://voice.54ucl.com/realtime/ws/`
 - 確認前端不是連到錯誤 host 或 port
 
 2. 有 `partial`，但沒有 `final`
