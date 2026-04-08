@@ -87,8 +87,8 @@ cd backend
 python main.py
 ```
 
-預設網址：`http://127.0.0.1:7985`
-線上體驗：`https://voice.54ucl.com/realtime/`
+**預設網址：`http://127.0.0.1:7985`**
+**線上體驗：`https://voice.54ucl.com/realtime/`**
 
 ## 前端串接步驟
 
@@ -286,29 +286,3 @@ ws.onmessage = (event) => {
   }
 };
 ```
-
-## 故障排查
-
-1. 連不上 `/ws`
-
-- 確認WebSocket路徑為 `ws://voice.54ucl.com/realtime/ws/`
-- 確認前端不是連到錯誤 host 或 port
-
-2. 有 `partial`，但沒有 `final`
-
-- 確認後端 log 有 `VAD 偵測到停頓`
-- 測試時請刻意停頓約 1 到 2 秒
-
-3. 一直出現重複字幕
-
-- 先檢查是否重複綁定 `onmessage`
-- 前端可增加一層 final 去重 (以最後一句文字比對)
-
-4. 文字內容有簡繁差異、繁中包含著英文
-
-- 因為 ASR (語音辨識) 其實是一種猜測，這是正常的，有些標點符號的差異前端不需要處理，直接顯示出來即可。
-
-5. 沒有 AI 回覆？
-
-- 確認一下 `.env` 或後端伺服器的 Azure OpenAI 相關變數（`AZURE_OPENAI_ENDPOINT` 等）是否都有設定。
-- 如果沒有設定，預設只會提供內建的「天氣」、「路況」查詢（講話內容必須包含這些關鍵字）。
