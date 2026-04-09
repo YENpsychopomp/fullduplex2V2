@@ -88,7 +88,7 @@ python main.py
 ```
 
 **預設網址：`http://127.0.0.1:7985`**
-**線上體驗：`https://voice.54ucl.com/realtime/`**
+**線上體驗：`https://voice.54ucl.com/realtime/`** (目前連不上)
 
 ## 前端串接步驟
 
@@ -202,7 +202,7 @@ python main.py
 
 ```javascript
 /* 前端：建立 WebSocket 與處理畫面/播放語音 */
-const ws = new WebSocket(`ws://voice.54ucl.com/realtime/ws/`);
+const ws = new WebSocket(`wss://b225.54ucl.com/ws`);
 let sessionId = null;
 
 // 音訊播放佇列
