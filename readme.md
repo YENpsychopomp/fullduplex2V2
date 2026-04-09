@@ -26,7 +26,7 @@
 ## 架構
 
 - 前端：只負責錄音、丟音軌給後端、取得文字時更新畫面及依序播放語音 (JS `Recorder` + 佇列機制)。
-- 後端：FastAPI WebSocket，你的老家就是 `/ws`。
+- 後端：FastAPI WebSocket，你的老家就是 `/wss`。
 - ASR (語音辨識)：遠端即時辨識 (Qwen)。
 - VAD (斷句系統)：我們用它去判斷使用者「什麼時候不講話了」，以此來觸發 AI 講話。
 - Agent (AI)：內建天氣、路況查詢與自由聊天的語言模型 (LangChain + Azure OpenAI)。
@@ -94,7 +94,7 @@ python main.py
 
 你需要準備以下幾個動作：
 
-1. 連線至 WebSocket：`ws://voice.54ucl.com/realtime/ws/`
+1. 連線至 WebSocket：`wss://b225.54ucl.com/ws`
 2. WebSocket 開啟 (`onopen`) 後先發送： `{ type: "request.session" }`
 3. 收到後端的 `response.session` 以後，就可以開始錄音。
 4. 設定錄音器的頻率為 **16000Hz (16kHz), 16-bit, Mono(單聲道)**。
